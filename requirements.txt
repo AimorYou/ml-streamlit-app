@@ -1,2 +1,9 @@
 streamlit
 pandas
+numpy
+torch
+torchvision
+matplotlib
+seaborn
+pillow
+pytorch-lightning
