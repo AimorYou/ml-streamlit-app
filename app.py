@@ -1,101 +1,229 @@
-# This file is based on: https://raw.githubusercontent.com/streamlit/demo-uber-nyc-pickups/master/app.py
+import os
 
-"""An example of showing geographic data."""
-
-import streamlit as st
-import pandas as pd
 import numpy as np
-import altair as alt
-import pydeck as pdk
+import pandas as pd
+import streamlit as st
+from ydata_profiling import ProfileReport
+from streamlit_pandas_profiling import st_profile_report
 
-DATE_TIME = "date/time"
-DATA_URL = (
-    "http://s3-us-west-2.amazonaws.com/streamlit-demo-data/uber-raw-data-sep14.csv.gz"
-)
-TOTAL_SAMPLES = 100000
+from pycaret.clustering import ClusteringExperiment
+from pycaret.regression import RegressionExperiment
+from pycaret.classification import ClassificationExperiment
 
-st.title("Uber Pickups in New York City")
-st.markdown(
-    """
-This is a demo of a Streamlit app that shows the Uber pickups
-geographical distribution in New York City. Use the slider
-to pick a specific hour and look at how the charts change.
+if os.path.exists("data/dataset.csv"):
+    df = pd.read_csv("data/dataset.csv", index_col=None)
 
-[See source code](https://github.com/streamlit/demo-uber-nyc-pickups/blob/master/app.py)
-"""
-)
+with st.sidebar:
+    st.title("NeuroWeb")
+    choice = st.radio("Navigation", ["Upload", "Profiling", "Modelling", "Download"])
+    st.info("This project is part of NeuroWeb platform that allows you receive the best machine learning model")
 
+if choice == "Upload":
+    st.title("Upload Your Dataset")
+    file = st.file_uploader("Upload Your Dataset")
+    if file:
+        df = pd.read_csv(file, index_col=None)
+        df.to_csv("data/dataset.csv", index=None)
+        st.dataframe(df)
 
-@st.cache_data(persist=True)
-def load_data(nrows):
-    data = pd.read_csv(DATA_URL, nrows=nrows)
-    data.rename(lambda x: str(x).lower(), axis="columns", inplace=True)
-    data[DATE_TIME] = pd.to_datetime(data[DATE_TIME])
-    return data
+if choice == "Profiling":
+    st.title("Exploratory Data Analysis")
+    profile_df = ProfileReport(df, title="Profiling Report")
+    st_profile_report(profile_df)
 
+if choice == "Modelling":
+    mdl = st.selectbox("Choose Modelling Type : ", ["Classification", "Regression", "Clustering"])
+    if mdl == "Clustering":
+        clustering_models = {
+            "K-Means Clustering": "kmeans",
+            "Affinity Propagation": "ap",
+            "Mean shift Clustering": "meanshift",
+            "Spectral Clustering": "sc",
+            "Agglomerative Clustering": "hclust",
+            "Density-Based Spatial Clustering": "dbscan",
+            "OPTICS Clustering": "optics",
+            "Birch Clustering": "birch",
+            "K-Modes Clustering": "kmodes"
+        }
+        clustering_model = st.selectbox("Select model for clustering",
+                                        clustering_models.keys(), key="clustering_model")
+    else:
+        chosen_target = st.selectbox("Choose the Target Column : ", df.columns)
 
-def run():
-    data = load_data(TOTAL_SAMPLES)
+    configure_flg = st.toggle("Start Configuring", key="configure_flg")
 
-    hour = st.slider("Hour to look at", 0, 23)
+    if configure_flg:
+        train_size = st.select_slider(label="Select train size", options=np.arange(0.00, 1.0, 0.01), value=0.65)
 
-    data = data[data[DATE_TIME].dt.hour == hour]
+        num_features = st.multiselect("Select numerical features", df.columns, key="num_features")
+        cat_features = st.multiselect("Select categorical features", list(set(df.columns) - set(num_features)),
+                                      key="cat_features")
+        date_features = st.multiselect("Select date type features", list(set(df.columns) - set(num_features) -
+                                                                         set(cat_features)),
+                                       key="date_features")
+        text_features = st.multiselect("Select text features", list(set(df.columns) - set(num_features) -
+                                                                    set(cat_features) - set(date_features)),
+                                       key="text_features")
 
-    st.subheader("Geo data between %i:00 and %i:00" % (hour, (hour + 1) % 24))
-    midpoint = (np.average(data["lat"]), np.average(data["lon"]))
+        keep_features = st.multiselect("Select features that never would dropped", df.columns, key="keep_features")
+        ignore_features = st.multiselect("Select features that would ignored",
+                                         list(set(df.columns) - set(keep_features)), key="ignore_features")
 
-    st.write(
-        pdk.Deck(
-            map_style="mapbox://styles/mapbox/light-v9",
-            initial_view_state={
-                "latitude": midpoint[0],
-                "longitude": midpoint[1],
-                "zoom": 11,
-                "pitch": 50,
-            },
-            layers=[
-                pdk.Layer(
-                    "HexagonLayer",
-                    data=data,
-                    get_position=["lon", "lat"],
-                    radius=100,
-                    elevation_scale=4,
-                    elevation_range=[0, 1000],
-                    pickable=True,
-                    extruded=True,
-                ),
-            ],
-        )
-    )
+        numeric_imputation = st.selectbox("Select imputing strategy for numerical columns.",
+                                          ["mean", "drop", "median", "mode",
+                                           "knn", "custom_value"], key="numeric_imputation")
+        numeric_imputation_custom_value = None
+        if numeric_imputation == "custom_value":
+            numeric_imputation_custom_value = st.text_input("Type value for numerical fillna", "NaN",
+                                                            key="numeric_imputation_custom_value")
 
-    st.subheader(
-        "Breakdown by minute between %i:00 and %i:00" % (hour, (hour + 1) % 24)
-    )
-    filtered = data[
-        (data[DATE_TIME].dt.hour >= hour) & (data[DATE_TIME].dt.hour < (hour + 1))
-    ]
-    hist = np.histogram(filtered[DATE_TIME].dt.minute, bins=60, range=(0, 60))[0]
-    chart_data = pd.DataFrame({"minute": range(60), "pickups": hist})
+        categorical_imputation = st.selectbox("Select imputing strategy for categorical columns.",
+                                              ["mode", "drop", "custom_value"], key="categorical_imputation")
+        categorical_imputation_custom_value = None
+        if categorical_imputation == "custom_value":
+            categorical_imputation_custom_value = st.text_input("Type value for categorical fillna", "NaN",
+                                                                key="categorical_imputation_custom_value")
 
-    st.altair_chart(
-        alt.Chart(chart_data)
-        .mark_area(
-            interpolate="step-after",
-        )
-        .encode(
-            x=alt.X("minute:Q", scale=alt.Scale(nice=False)),
-            y=alt.Y("pickups:Q"),
-            tooltip=["minute", "pickups"],
-        ),
-        use_container_width=True,
-    )
+        polynomial_features = st.checkbox("Flag of using features that derived using existing numeric features",
+                                          key="polynomial_features")
+        polynomial_degree = 2
+        if polynomial_features:
+            polynomial_degree = st.number_input("Select degree of polynomial features", 2,
+                                                key="polynomial_degree")
 
-    if st.checkbox("Show raw data", False):
-        st.subheader(
-            "Raw data by minute between %i:00 and %i:00" % (hour, (hour + 1) % 24)
-        )
-        st.write(data)
+        remove_multicollinearity = st.checkbox("Flag of removing features with multicollinearity",
+                                               key="remove_multicollinearity")
+        multicollinearity_threshold = 2
+        if remove_multicollinearity:
+            multicollinearity_threshold = st.select_slider(label="multicollinearity_threshold",
+                                                           options=np.arange(0.00, 1.0, 0.01), value=0.9,
+                                                           key="multicollinearity_threshold")
 
+        transformation = st.checkbox("Flag of using Gaussian-like transformation", key="transformation")
+        normalize = st.checkbox("Flag of using normalization", key="normalize")
+        normalize_method = 2
+        if normalize:
+            normalize_method = st.selectbox("Select imputing strategy for categorical columns.",
+                                            ["minmax", "maxabs", "robust"], key="normalize_method")
 
-if __name__ == "__main__":
-    run()
+        pca = st.checkbox("Flag of using pca", key="pca")
+        feature_selection = st.checkbox("Flag of using feature_selection", key="feature_selection")
+        n_features_to_select = 0.9
+        if feature_selection:
+            n_features_to_select = st.select_slider(label="The maximum number of features to select",
+                                                    options=np.arange(0.00, 1.0, 0.01), value=0.9,
+                                                    key="n_features_to_select")
+
+    if st.button("Start Modelling"):
+        if mdl == "Classification":
+            s = ClassificationExperiment()
+
+            if configure_flg:
+                s.setup(df,
+                        target=chosen_target,
+                        session_id=123,
+                        train_size=train_size,
+                        numeric_features=num_features,
+                        categorical_features=cat_features,
+                        date_features=date_features,
+                        text_features=text_features,
+                        keep_features=keep_features,
+                        ignore_features=ignore_features,
+                        numeric_imputation=numeric_imputation if numeric_imputation != "custom_value" else numeric_imputation_custom_value,
+                        categorical_imputation=categorical_imputation if categorical_imputation != "custom_value" else categorical_imputation_custom_value,
+                        polynomial_features=polynomial_features,
+                        polynomial_degree=polynomial_degree,
+                        remove_multicollinearity=remove_multicollinearity,
+                        multicollinearity_threshold=multicollinearity_threshold,
+                        transformation=transformation,
+                        normalize=normalize,
+                        normalize_method=normalize_method,
+                        pca=pca,
+                        feature_selection=feature_selection,
+                        n_features_to_select=n_features_to_select)
+            else:
+                s.setup(df, target=chosen_target, session_id=123)
+
+            setup_df = s.pull()
+            st.dataframe(setup_df)
+
+            best_model = s.compare_models()
+            compare_df = s.pull()
+            st.dataframe(compare_df)
+            s.save_model(best_model, "best_model")
+
+        if mdl == "Regression":
+            s = RegressionExperiment()
+
+            if configure_flg:
+                s.setup(df,
+                        target=chosen_target,
+                        session_id=123,
+                        train_size=train_size,
+                        numeric_features=num_features,
+                        categorical_features=cat_features,
+                        date_features=date_features,
+                        text_features=text_features,
+                        keep_features=keep_features,
+                        ignore_features=ignore_features,
+                        numeric_imputation=numeric_imputation if numeric_imputation != "custom_value" else numeric_imputation_custom_value,
+                        categorical_imputation=categorical_imputation if categorical_imputation != "custom_value" else categorical_imputation_custom_value,
+                        polynomial_features=polynomial_features,
+                        polynomial_degree=polynomial_degree,
+                        remove_multicollinearity=remove_multicollinearity,
+                        multicollinearity_threshold=multicollinearity_threshold,
+                        transformation=transformation,
+                        normalize=normalize,
+                        normalize_method=normalize_method,
+                        pca=pca,
+                        feature_selection=feature_selection,
+                        n_features_to_select=n_features_to_select)
+            else:
+                s.setup(df, target=chosen_target, session_id=123)
+
+            setup_df = s.pull()
+            st.dataframe(setup_df)
+
+            best_model = s.compare_models()
+            compare_df = s.pull()
+            st.dataframe(compare_df)
+            s.save_model(best_model, "best_model")
+
+        elif mdl == "Clustering":
+            s = ClusteringExperiment()
+
+            if configure_flg:
+                s.setup(df,
+                        session_id=123,
+                        numeric_features=num_features,
+                        categorical_features=cat_features,
+                        date_features=date_features,
+                        text_features=text_features,
+                        keep_features=keep_features,
+                        ignore_features=ignore_features,
+                        numeric_imputation=numeric_imputation if numeric_imputation != "custom_value" else numeric_imputation_custom_value,
+                        categorical_imputation=categorical_imputation if categorical_imputation != "custom_value" else categorical_imputation_custom_value,
+                        polynomial_features=polynomial_features,
+                        polynomial_degree=polynomial_degree,
+                        remove_multicollinearity=remove_multicollinearity,
+                        multicollinearity_threshold=multicollinearity_threshold,
+                        transformation=transformation,
+                        normalize=normalize,
+                        normalize_method=normalize_method,
+                        pca=pca)
+            else:
+                s.setup(df, session_id=123)
+
+            created_clustering_model = s.create_model(clustering_models[clustering_model])
+            results = s.assign_model(created_clustering_model)
+            st.dataframe(results)
+            s.plot_model(created_clustering_model, plot="cluster", display_format="streamlit")
+            s.plot_model(created_clustering_model, plot="tsne", display_format="streamlit")
+            s.plot_model(created_clustering_model, plot="elbow", display_format="streamlit")
+            s.plot_model(created_clustering_model, plot="silhouette", display_format="streamlit")
+            s.plot_model(created_clustering_model, plot="distance", display_format="streamlit")
+            s.plot_model(created_clustering_model, plot="distribution", display_format="streamlit")
+
+if choice == "Download":
+    with open("data/best_model.pkl", "rb") as f:
+        st.download_button("Download Model", f, file_name="data/best_model.pkl")
